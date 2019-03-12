@@ -1,3 +1,3 @@
 # example-problem
 
-[https://leechristie.com/demo](Demo)
+[Demo](https://leechristie.com/demo)
