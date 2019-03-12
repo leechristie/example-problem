@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>ExampleProblem</title>
+<script src="bignumber.min.js" lang="javascript"></script>
+<script lang="javascript">
+
+    var CONTRACT_INSTANCE = null;
+    var CONTRACT_NAME = "ExampleProblem";
+    var CONTRACT_ADDRESS = "0x205830daa5c1d145259cb858f0624f9ef9bca981";
+
+    var item_states = [false, false, false, false, false];
+    var account = null;
+
+    var lastProcessedTransactionHash = null;
+    var lastFailedTransactionHash = null;
+    var ignoreEventProcessed = true;
+    var ignoreEventFailed = true;
+
+    // Uses AJAX to request file contents
+    function request_file(path, callback) {
+        var request = new XMLHttpRequest();
+        request.open("GET", path, true);
+        request.onload = () => {
+            if (request.readyState === 4) {
+                console.log("path: " + path);
+                console.log("request.status: " + request.status);
+                if (request.status === 200) {
+                    callback(null, request.responseText);
+                } else {
+                    callback(request.statusText, null);
+                }
+            }
+        };
+        request.onerror = () => {
+            callback(request.statusText, null);
+        };
+        request.send(null);
+    }
+
+    // Requests a smart contract by name and address
+    function request_contract(name, address, callback) {
+        request_file("https://leechristie.com/build/contracts/" + name + ".json",
+            (error, json) => {
+                if (!error) {
+                    var parsed = JSON.parse(json);
+                    var abi = parsed.abi;
+                    var MyContract = web3.eth.contract(abi);
+                    var instance = MyContract.at(address);
+                    console.log("Loaded contract " + name + " at " + address);
+                    callback(null, instance);
+                } else {
+                    callback(error, null);
+                }
+            }
+        );
+    }
+
+    // Checks balance
+    function check_balance(instance) {
+        instance.check_balance(
+            (error, return_value) => {
+                if (!error) {
+                    var eth = return_value / 1000000000000000000.0
+                    console.log("called check_balance. return_value: " + return_value + " (" + eth + " ETH)");
+                } else {
+                    console.log("error calling check_balance: " + error);
+                }
+            }
+        );
+    }
+
+    // Checks owner address
+    function owner_address(instance) {
+        instance.owner_address(
+            (error, return_value) => {
+                if (!error) {
+                    console.log("called owner_address. return_value: " + return_value);
+                } else {
+                    console.log("error calling owner_address: " + error);
+                }
+            }
+        );
+    }
+
+    // Wtihdraws all ETH from the contract
+    function withdraw_all(instance) {
+        instance.withdraw_all(
+            (error, txhash) => {
+                if (!error) {
+                    console.log("called withdraw_all. tx hash: " + txhash);
+                } else {
+                    console.log("error calling withdraw_all: " + error);
+                }
+            }
+        );
+    }
+
+    // Makes a claim
+    function claim(instance, candidate) {
+        instance.claim(candidate,
+            (error, txhash) => {
+                if (!error) {
+                    console.log("called claim. tx hash: " + txhash);
+                } else {
+                    console.log("error calling claim: " + error);
+                }
+            }
+        );
+    }
+
+    // Sends ETH to an address
+    function send_ether(wei, address) {
+        web3.eth.sendTransaction(
+            {
+                to: address,
+                value: wei
+            },
+            (error, txhash) => {
+                if (!error) {
+                    console.log("called fallback. tx hash: " + txhash);
+                } else {
+                    console.log("error calling fallback: " + error);
+                }
+            }
+        );
+    }
+
+    // Updates owner address on the UI
+    function update_ui_owner(instance) {
+        instance.owner_address(
+            (error, return_value) => {
+                if (!error) {
+                    document.getElementById("owner_address").innerHTML = return_value;
+                    console.log("called owner_address. return_value: " + return_value);
+                } else {
+                    console.log("error calling owner_address: " + error);
+                }
+            }
+        );
+    }
+
+    // Updates the balance on the UI in a loop
+    function update_ui_balance(instance) {
+        instance.check_balance(
+            (error, return_value) => {
+                if (!error) {
+                    var eth_str = (return_value / 1000000000000000000.0) + " ETH"
+                    if (document.getElementById("contract_balance").innerHTML != eth_str) {
+                        document.getElementById("contract_balance").innerHTML = eth_str;
+                        console.log("called check_balance. return_value: " + return_value + " (" + eth_str + ")");
+                    }
+                } else {
+                    console.log("error calling check_balance: " + error);
+                }
+            }
+        );
+    }
+    function start_interval_for_balance(instance, interval) {
+        console.log("start_interval_for_balance(" + instance + ", " + interval + ");");
+        update_ui_balance(instance)
+        var balanceInterval = setInterval(function() {
+            update_ui_balance(instance);
+        }, interval);
+    }
+
+    // updates the UI for the MetaMask accounts[0]
+    function start_interval_for_metamask_address(web3js, interval) {
+        console.log("start_interval_for_metamask_address");
+        if (web3js.eth.accounts[0] !== account) {
+            account = web3js.eth.accounts[0];
+            document.getElementById("metamask_address").innerHTML = account;
+            console.log("web3js.eth.accounts[0] = " + account);
+        }
+        var accountInterval = setInterval(function() {
+            if (web3js.eth.accounts[0] !== account) {
+                account = web3js.eth.accounts[0];
+                document.getElementById("metamask_address").innerHTML = account;
+                console.log("web3js.eth.accounts[0] = " + account);
+            }
+        }, 100);
+    }
+
+    // Starts the DApp
+    function start_dapp(web3js) {
+        request_contract(CONTRACT_NAME, CONTRACT_ADDRESS,
+            (error, instance) => {
+                if (!error) {
+                    init_item_states();
+                    document.getElementById("methods").style.display = "block";
+                    CONTRACT_INSTANCE = instance;
+                    document.getElementById("contract_addr").innerHTML = CONTRACT_ADDRESS;
+                    start_interval_for_balance(CONTRACT_INSTANCE, 2000);
+                    start_interval_for_metamask_address(web3js, 100);
+                    update_ui_owner(CONTRACT_INSTANCE);
+                    start_intervals_for_events(CONTRACT_INSTANCE, 2000);
+                } else {
+                    console.error(error);
+                }
+            }
+        );
+    }
+
+    // UI buttons
+    function btn_fallback() {
+        console.log("btn_fallback");
+        var eth = new BigNumber(document.getElementById("fallback_value").value);
+        var wei = web3.toWei(eth, "ether");
+        console.log("Sending " + wei + " wei (" + eth + " ETH)");
+        send_ether(wei, CONTRACT_ADDRESS);
+    }
+    function btn_withdraw_all() {
+        console.log("btn_withdraw_all");
+        console.log("Withdrawing from contract");
+        withdraw_all(CONTRACT_INSTANCE);
+    }
+    function btn_claim() {
+        console.log("btn_claim");
+        console.log("Claiming bounty from contract");
+        claim(CONTRACT_INSTANCE, item_states);
+    }
+    function btn_check_balance() {
+        console.log("btn_check_balance");
+        console.log("Checking balance");
+        check_balance(CONTRACT_INSTANCE);
+    }
+    function btn_owner_address() {
+        console.log("btn_owner_address");
+        console.log("Checking owner");
+        owner_address(CONTRACT_INSTANCE);
+    }
+
+    // Event watch
+    function showEvent(event) {
+        console.log(event);
+        if (event.event == "claim_processed") {
+            var candidate = event.args.candidate;
+            var claimant = event.args.claimant;
+            var prize_wei_value = event.args.prize_wei_value;
+            var value = event.args.value;
+            var weight = event.args.weight;
+            console.log("claimant: " + claimant);
+            console.log("candidate: " + candidate);
+            console.log("weight: " + weight);
+            console.log("value: " + value);
+            console.log("prize_wei_value: " + prize_wei_value);
+            document.getElementById("log").innerHTML =
+                "<strong>claim_processed</strong><br>" +
+                "claimant: " + claimant + "<br>" +
+                "candidate: " + candidate + "<br>" +
+                "weight: " + weight + "<br>" +
+                "value: " + value +"<br>" +
+                "prize_wei_value: " + prize_wei_value + " (" + (prize_wei_value / 1000000000000000000.0) + " ETH)";
+        } else if (event.event == "claim_failed") {
+            var candidate = event.args.candidate;
+            var claimant = event.args.claimant;
+            var value = event.args.value;
+            var weight = event.args.weight;
+            console.log("claimant: " + claimant);
+            console.log("candidate: " + candidate);
+            console.log("weight: " + weight);
+            console.log("value: " + value);
+            document.getElementById("log").innerHTML =
+                "<strong>claim_failed</strong><br>" +
+                "claimant: " + claimant + "<br>" +
+                "candidate: " + candidate + "<br>" +
+                "weight: " + weight + "<br>" +
+                "value: " + value;
+        } else {
+            console.error("unknown event : " + event.event);
+        }
+    }
+    function event_test(instance) {
+        instance.claim_processed().watch(
+            (error, result) => {
+                if (!error) {
+                    if (!ignoreEventProcessed) {
+                        if (lastProcessedTransactionHash != result.transactionHash) {
+                            console.log("claim_processed event watched: " + result.transactionHash);
+                            showEvent(result);
+                            console.log("hash (new) = " + result.transactionHash);
+                        } else {
+                            console.log("hash (same) = " + result.transactionHash);
+                        }
+                    } else {
+                        console.log("hash (ignored) = " + result.transactionHash);
+                    }
+                    ignoreEventProcessed = false;
+                    lastProcessedTransactionHash = result.transactionHash;
+                } else {
+                    if (!ignoreEventProcessed) {
+                        console.log("error watching claim_processed event: " + error);
+                    } else {
+                        console.log("error (ignored) = " + error);
+                    }
+                    ignoreEventProcessed = false;
+                }
+            }
+        );
+        instance.claim_failed().watch(
+            (error, result) => {
+                if (!error) {
+                    if (!ignoreEventFailed) {
+                        if (lastFailedTransactionHash != result.transactionHash) {
+                            console.log("claim_failed event watched: " + result.transactionHash);
+                            showEvent(result);
+                            console.log("hash (new) = " + result.transactionHash);
+                        } else {
+                            console.log("hash (same) = " + result.transactionHash);
+                        }
+                    } else {
+                        console.log("hash (ignored) = " + result.transactionHash);
+                    }
+                    ignoreEventFailed = false;
+                    lastFailedTransactionHash = result.transactionHash;
+                } else {
+                    if (!ignoreEventFailed) {
+                        console.log("error watching claim_failed event: " + error);
+                    } else {
+                        console.log("error (ignored) = " + error);
+                    }
+                    ignoreEventFailed = false;
+                }
+            }
+        );
+    }
+    function start_intervals_for_events(instance, interval) {
+        console.log("start_intervals_for_events(" + instance + ", " + interval + ");");
+        var eventInterval = setInterval(function() {
+            event_test(instance);
+        }, interval);
+        setTimeout(function() {
+            ignoreEventProcessed = false;
+            ignoreEventFialed = false;
+        }, interval * 2);
+    }
+
+    // Local knapsack calculations
+    function compute_weight(items) {
+        var weight = 0;
+        if (items[0]) weight += 12;
+        if (items[1]) weight += 2;
+        if (items[2]) weight += 1;
+        if (items[3]) weight += 1;
+        if (items[4]) weight += 4;
+        return weight;
+    }
+    function compute_value(items) {
+        var value = 0;
+        if (items[0]) value += 4;
+        if (items[1]) value += 2;
+        if (items[2]) value += 2;
+        if (items[3]) value += 1;
+        if (items[4]) value += 10;
+        return value;
+    }
+    function recompute_value_and_weight() {
+        console.log(item_states);
+        console.log("weight = " + compute_weight(item_states));
+        console.log("value = " + compute_value(item_states));
+        document.getElementById("selected_weight").innerHTML = compute_weight(item_states);
+        document.getElementById("selected_value").innerHTML = compute_value(item_states);
+    }
+    function init_item_states() {
+        item_states[0] = document.getElementById("item0").checked;
+        item_states[1] = document.getElementById("item1").checked;
+        item_states[2] = document.getElementById("item2").checked;
+        item_states[3] = document.getElementById("item3").checked;
+        item_states[4] = document.getElementById("item4").checked;
+        recompute_value_and_weight();
+    }
+    function item_changed(index, value) {
+        console.log("item_changed(" + index, value + ")");
+        item_states[index] = value;
+        recompute_value_and_weight();
+    }
+    function item0_changed() {
+        item_changed(0, document.getElementById("item0").checked)
+    }
+    function item1_changed() {
+        item_changed(1, document.getElementById("item1").checked)
+    }
+    function item2_changed() {
+        item_changed(2, document.getElementById("item2").checked)
+    }
+    function item3_changed() {
+        item_changed(3, document.getElementById("item3").checked)
+    }
+    function item4_changed() {
+        item_changed(4, document.getElementById("item4").checked)
+    }
+
+    // Starts the DApp if web3 js is found, otherwise displays and error
+    window.addEventListener("load", function() {
+        if (typeof web3 !== "undefined") {
+            document.getElementById("content").style.display = "block";
+            document.getElementById("loading").style.display = "none";
+            console.log(web3.currentProvider.enable());
+            start_dapp(new Web3(web3.currentProvider));
+        } else {
+            document.getElementById("error").style.display = "block";
+            document.getElementById("loading").style.display = "none";
+        }
+    })
+
+</script>
+</head>
+<body>
+    <p><a href="https://ropsten.etherscan.io/address/0x205830daa5c1d145259cb858f0624f9ef9bca981">(view contract on Etherscan)</a></p>
+    <p id="loading" style="display: block">Loading Web3 JS...</p>
+    <div id="content" style="display: none">
+        <p>Web3 JS loaded!</p>
+        <div id="methods" style="display: none">
+            <p>Smart contract ExampleProblem loaded!</p>
+            <table>
+                <tr>
+                    <td>Contract Address:</td>
+                    <td id="contract_addr">(loading)</td>
+                </tr>
+                <tr>
+                    <td>Owner Address:</td>
+                    <td id="owner_address">(loading)</td>
+                </tr>
+                <tr>
+                    <td>MetaMask Address:</td>
+                    <td id="metamask_address">(loading)</td>
+                </tr>
+                <tr>
+                    <td>Contract Balance:</td>
+                    <td id="contract_balance">(loading)</td>
+                </tr>
+            </table>
+            <form action="javascript:void(0);">
+                <input id="fallback_value" type="text" value="3.141592653589793238"></input> ETH
+                <button onclick="btn_fallback()">Fund Contract</button>
+            </form>
+            <div style="border: 1px dotted red; margin: 5px; padding: 5px">
+            <p>Last Event:</p>
+            <p id="log"></p>
+            </div>
+            <!--
+            <form style="padding: 5px; border: 1px solid black; margin:5px" action="javascript:void(0);">
+                <button onclick="btn_check_balance()">Check Balance</button>
+            </form>
+            <form style="padding: 5px; border: 1px solid black; margin:5px" action="javascript:void(0);">
+                <button onclick="btn_owner_address()">Owner Address</button>
+            </form>
+            -->
+            <form style="padding: 5px; border: 1px solid black; margin:5px" action="javascript:void(0);">
+                <button onclick="btn_withdraw_all()">Withdraw All</button> (OWNER ONLY)
+            </form>
+            <form style="padding: 5px; border: 1px solid black; margin:5px" action="javascript:void(0);">
+                <p>Knapsack capacity: weight &le; 6 kg</p>
+                <p>Target value: value &ge; $13</p>
+                <table style="text-align: center">
+                    <tr>
+                        <th style="text-align: right">Weight:</th>
+                        <td>12</td>
+                        <td>2</td>
+                        <td>1</td>
+                        <td>1</td>
+                        <td>4</td>
+                    </tr>
+                    <tr>
+                        <th style="text-align: right">Value:</th>
+                        <td>4</td>
+                        <td>2</td>
+                        <td>2</td>
+                        <td>1</td>
+                        <td>10</td>
+                    </tr>
+                    <tr>
+                        <th style="text-align: right">Selected:</th>
+                        <td><input type="checkbox" id="item0" onclick="item0_changed();"></input></td>
+                        <td><input type="checkbox" id="item1" onclick="item1_changed();"></input></td>
+                        <td><input type="checkbox" id="item2" onclick="item2_changed();"></input></td>
+                        <td><input type="checkbox" id="item3" onclick="item3_changed();"></input></td>
+                        <td><input type="checkbox" id="item4" onclick="item4_changed();"></input></td>
+                    </tr>
+                </table>
+                <p>weight = <span id="selected_weight">0</span> kg</p>
+                <p>value = $<span id="selected_value">0</span></p>
+                <button onclick="btn_claim()">Claim Bounty</button>
+                </form>
+        </div>
+    </div>
+    <p id="error" style="display: none">Unable to find Web3 JS!</p>
+</body>
+</html>
